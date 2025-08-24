@@ -242,11 +242,11 @@ class AndroidEnv(BasicComponent):
 
 class PCEnv(BasicComponent):
     def __init__(self, *,
-                aw_client:ActivityWatchClient,
-                chrome_apps:List[str],
                 interval_seconds:int = 15,
                 watched_path:List[str] = [],
                 name:str = 'PCEnv',
+                 ws_host: str = '127.0.0.1',
+                 ws_port: int = 8765
                 ):
         """
         Args:
@@ -256,42 +256,44 @@ class PCEnv(BasicComponent):
             name (str, optional): the name of the environment. Defaults to 'PCEnv'.
         """
         super().__init__(name)
-        self.aw_client = aw_client
-        self.chrome_apps = chrome_apps
         self.interval_seconds = interval_seconds
+        self.ws_host = ws_host
+        self.ws_port = ws_port
+        self.websocket = None  # 用于存储连接，以便工具可以发回消息
 
-        self.action_listener = ActionListener(
-            aw_client = aw_client,
-            chrome_apps = chrome_apps,
-            interval_seconds = interval_seconds,
-            watched_path=watched_path)
 
-        self.executor = Executor()
 
         complete_tools = toolreg.get_all_tools_dict()
         self.tools = [t for t in complete_tools if 'android' not in t["name"]]
 
     async def setup(self):
-        self.logger.info("Initializing PC Environment...")
+        self.logger.info("正在初始化网站智能体环境...")
 
-        def start_local_server():
-            try:
-                subprocess.run(['python', 'main.py'])
-            except:
-                subprocess.run(['python3', 'main.py'])
+        # 不再需要启动 main.py 工具服务器，因为工具逻辑会改变
+        # self.thread = threading.Thread(...)
+        # self.thread.start()
 
-        # We set up the uvicorn in another thread, so we don't have to open to terminal.
-        self.thread = threading.Thread(target = start_local_server, daemon=True)
-        self.thread.start()
-        self.logger.info("Local server established.")
+        # 启动WebSocket服务器
+        server = await websockets.serve(self.handle_connection, self.ws_host, self.ws_port)
+        self.logger.info(f"WebSocket服务器已在 ws://{self.ws_host}:{self.ws_port} 启动")
 
-        self.add(sc.agent.operations, content = json.dumps(self.tools), silent = True)
-        self.listen(sc.pc.notify)(self.execute)
-        self.action_listener.start()
-        read_task = asyncio.create_task(self.read_data())
-        self.logger.info("PC Environment Initialized. Action Listener running...")
+        # 让服务器一直运行
+        await server.wait_closed()
 
-        await asyncio.gather(read_task)
+    async def handle_connection(self, websocket, path):
+        """处理来自JS监视器的连接和消息"""
+        self.logger.info("浏览器监视器已连接！")
+        self.websocket = websocket  # 保存连接
+        try:
+            async for message in websocket:
+                # 当收到来自浏览器的观察数据时...
+                self.logger.debug(f"收到观察数据: {message}")
+                # ...将其放入EventSink，触发大脑(Agent)思考
+                self.add(sc.observation, content=message)
+        except websockets.exceptions.ConnectionClosed:
+            self.logger.warning("浏览器监视器连接已断开。")
+        finally:
+            self.websocket = None
 
     async def read_data(self):
 
