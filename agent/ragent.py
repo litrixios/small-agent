@@ -77,38 +77,39 @@ Android Listening Configuration:
                 eventSink.add(tags = sc.android.write, content = json.dumps(nop_action))
 
         case 'PC':
-            if chromes == '':
-                raise ValueError('Please specify the chrome apps you want to read by adding params --chromes chrome1,chrome2,chrome3')
+            # 移除了所有和 ActivityWatch 及 chromes 相关的代码
+            # if chromes == '':
+            #     raise ValueError(...)
+            # chromes = [...]
+            # aw_client = ActivityWatchClient(...)
+            # display_buckets = [...]
 
-            chromes = [chrome.replace('-',' ') for chrome in chromes.split(',')]
-            aw_client = ActivityWatchClient(port = port)
-            display_buckets = ['    - ' + bucket for bucket in aw_client.get_buckets().keys()]
             CONFIG_INFO = \
-f'''
-Android Socket Configuration:
-- Activity port: {port}.
-- Assistance Interval: {interval} seconds.
-- Reading chromes as: {chromes}.
-- Reading buckets from:
-''' + '\n'.join(display_buckets)
-
+                f'''
+        网站智能体配置信息:
+        - WebSocket 端口: {port if port != 5600 else 8765}.
+        - 思考间隔: {interval} 秒.
+        '''
             logger.info(CONFIG_INFO)
 
-            agent = DemoAgent(env = platform, name = 'PC Agent')
-            pc = PCEnv(aw_client = aw_client,
-                        chrome_apps = chromes,
-                        interval_seconds = interval,
-                        watched_path=[os.path.abspath('.')],
-                        name = platform)
-            trigger = Trigger(env = platform)
+            # 用新的方式创建 PCEnv，不再传入 aw_client
+            pc_env_port = port if port != 5600 else 8765  # 如果用户没指定端口，就用8765
+            pc = PCEnv(interval_seconds=interval,
+                       name=platform,
+                       ws_port=pc_env_port)
+
+            # Agent 和 Trigger 的创建保持不变
+            agent = DemoAgent(env=platform, name='PC Agent')
+            trigger = Trigger(env=platform)
             eventSink.init()
 
-            eventSink.add(tags = sc.setup, content = 'Set up.')
+            eventSink.add(tags=sc.setup, content='Set up.')
             await eventSink.wait(sc.setup)
-            logger.info("*** Components setup completed. ***")
+            logger.info("*** 组件设置完成。 ***")
 
-            while True:
-                await asyncio.sleep(1)
+            # 移除了旧的 while True 循环，因为 PCEnv 自己会阻塞并维持程序运行
+            # while True:
+            #     await asyncio.sleep(1)
 
         case __:
             raise ValueError('Please specify the platform as "PC" or "Mobile"')

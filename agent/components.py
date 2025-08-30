@@ -242,83 +242,72 @@ class AndroidEnv(BasicComponent):
 
 class PCEnv(BasicComponent):
     def __init__(self, *,
-                interval_seconds:int = 15,
-                watched_path:List[str] = [],
-                name:str = 'PCEnv',
+                 interval_seconds: int = 15,
+                 name: str = 'PCEnv',
                  ws_host: str = '127.0.0.1',
                  ws_port: int = 8765
-                ):
-        """
-        Args:
-            aw_client (ActivityWatchClient): The client to let us monitor the PC.
-            chrome_apps (List[str]): the chromes that you want to monitor( We can't get rid of this :( )
-            interval_seconds (int, optional): The pause time between two interactions. Defaults to 15 [seconds].
-            name (str, optional): the name of the environment. Defaults to 'PCEnv'.
-        """
+                 ):
         super().__init__(name)
         self.interval_seconds = interval_seconds
         self.ws_host = ws_host
         self.ws_port = ws_port
-        self.websocket = None  # 用于存储连接，以便工具可以发回消息
+        self.websocket = None
 
-
+        global global_pc_env
+        global_pc_env = self
 
         complete_tools = toolreg.get_all_tools_dict()
         self.tools = [t for t in complete_tools if 'android' not in t["name"]]
 
     async def setup(self):
         self.logger.info("正在初始化网站智能体环境...")
+        self.listen(sc.pc.notify)(self.execute)
 
-        # 不再需要启动 main.py 工具服务器，因为工具逻辑会改变
-        # self.thread = threading.Thread(...)
-        # self.thread.start()
-
-        # 启动WebSocket服务器
         server = await websockets.serve(self.handle_connection, self.ws_host, self.ws_port)
-        self.logger.info(f"WebSocket服务器已在 ws://{self.ws_host}:{self.ws_port} 启动")
+        self.logger.info(f"WebSocket服务器已在 ws://{self.ws_host}:{self.ws_port} 启动，等待浏览器连接...")
 
-        # 让服务器一直运行
+        self.add(sc.agent.operations, content=json.dumps(self.tools), silent=True)
         await server.wait_closed()
 
+    # =================================================================
+    # === 关键修正：确保函数定义里包含了 websocket 和 path 两个参数 ===
     async def handle_connection(self, websocket, path):
-        """处理来自JS监视器的连接和消息"""
-        self.logger.info("浏览器监视器已连接！")
-        self.websocket = websocket  # 保存连接
+    # =================================================================
+        """当 monitor.js 连接进来时，这个函数会被调用"""
+        self.logger.info(f"浏览器监视器已连接 (路径: {path})！AI的'眼睛'已睁开。")
+        self.websocket = websocket
         try:
             async for message in websocket:
-                # 当收到来自浏览器的观察数据时...
                 self.logger.debug(f"收到观察数据: {message}")
-                # ...将其放入EventSink，触发大脑(Agent)思考
                 self.add(sc.observation, content=message)
         except websockets.exceptions.ConnectionClosed:
             self.logger.warning("浏览器监视器连接已断开。")
         finally:
             self.websocket = None
 
-    async def read_data(self):
-
-        await asyncio.sleep(self.interval_seconds)
-
-        while True:
-            data:Dict = self.action_listener.send_data()
-            async with self.get_tag_lock(sc.activity):
-                self.add(sc.observation, content = json.dumps(data,ensure_ascii=False))
-            await asyncio.sleep(self.interval_seconds)
-
     async def execute(self):
-        operation:str = self.get(sc.agent.execute).content
+        operation_event: SEvent = self.get(sc.agent.execute)
+        operation: str = operation_event.content
 
         if operation == 'nop':
+            self.logger.info("大脑决定不执行任何操作。")
             return
 
-        current_event:str = self.get(sc.observation).content
-        proposal:str = self.get(sc.agent.propose).content
-        proposal_json:Dict = json.loads(proposal)
+        self.logger.info(f"收到大脑指令，准备执行操作: {operation}")
+        parts = operation.split('&')
+        tool_name = parts[0]
+        kwargs = {}
+        if len(parts) > 1:
+            for part in parts[1:]:
+                key, value = part.split('=', 1)
+                kwargs[key] = value
 
-        exec_args = {"events": current_event, "func_call": operation}
-        self.executor.receive(proposal_json, exec_args)
-        self.executor.send()
-
+        try:
+            tool_func = toolreg[tool_name]
+            result = await tool_func(**kwargs)
+            self.logger.info(f"操作执行完毕: {result}")
+        except Exception as e:
+            self.logger.error(f"执行操作 {tool_name} 时出错: {e}")
 class DemoAgent(BasicComponent):
     def __init__(self,*,
                 env:Literal["PC","Mobile"],
@@ -358,13 +347,14 @@ class DemoAgent(BasicComponent):
 
                 # TODO: Can we add user feedback for PC?
 
-                user_content:str = json.dumps({
-                    "Instructions": "Now analyze the history events and provide a task if you think the user needs your help using the given format. If the user is in an email application and there are no mails, you could first refresh the mail by swipe down using `swipe` tool.",
-                    "operations": ops
+                user_content: str = json.dumps({
+                    "Instructions": "你是一个主动的网站智能助手。请分析用户最近在网页上的行为历史(history)，并判断是否需要提供帮助。如果需要，请从可用操作(operations)中选择一个最合适的工具来执行任务。如果不需要帮助，请将'Operation'字段设为'nop'。",
+                    "operations": ops,
+                    "history": history  # 把history也放进prompt，让模型看得更清楚
                 })
 
-                if self.env == "Mobile":
-                    history = history[-1:]
+                # if self.env == "Mobile":
+                #     history = history[-1:]
 
                 global img_base64
 
@@ -398,182 +388,40 @@ class DemoAgent(BasicComponent):
                 else:
                     self.add(sc.agent.execute, "nop")
 
+
 class Trigger(BasicComponent):
-    def __init__(self,*,
-                env: Literal["PC","Mobile"],
-                name:str = "Trigger",
-                ):
+    def __init__(self, *,
+                 env: Literal["PC", "Mobile"],
+                 name: str = "Trigger",
+                 ):
         """
         Args:
-            env (Literal['PC','Mobile']): Whether we are on PC or the Mobile. we send the proposal to different channels.
-            name (str, optional): The name of the agent. Defaults to "Trigger".
+            env (Literal['PC','Mobile']): 我们当前工作的环境。
+            name (str, optional): 组件的名称。
         """
         super().__init__(name)
-        self.env:str = env
+        self.env: str = env
 
     async def setup(self):
         logger.info("Initializing Trigger...")
+        # 监听来自“大脑”(Agent)的最终决策指令
         self.listen(sc.agent.execute)(self.execute)
         logger.info("Trigger setup done.")
 
     async def execute(self):
-        def reformat_action(tool_description:Optional[str] = 'nop') -> Dict:
-            """
-            (Android only) Reformat the description from agent to restriced format.
+        # 从事件中获取大脑决定要执行的操作字符串
+        operation: str = self.get(sc.agent.execute).content
+        self.logger.info(f"神经系统(Trigger)收到指令: {operation}")
 
-            Args:
-                tool_description (str): a string containing the name of the tool and the arguments joined by separator '&'
-                Example input: func_name&param1=value1&param2=value2
-            """
+        # 根据当前环境，将指令转发到正确的执行频道
+        if self.env == 'PC':
+            # 对于PC/网站环境，我们把指令转发到 sc.pc.notify 频道
+            # PCEnv 正在监听这个频道
+            self.add(sc.pc.notify, content=operation)
 
-            nop_action = {
-                "type": "action",
-                "action": {
-                    "nop": {
-                        "screenshot": True
-                    }
-                }
-            }
-
-            if tool_description == 'nop':
-                return nop_action
-
-            action_json = None
-
-            func_list = tool_description.split('&')
-
-            func_name = func_list[0]
-            func_param = func_list[1:]
-
-            try:
-                param_dict = {k:v for k,v in [p.split('=') for p in func_param]}
-            except:
-                param_dict = {}
-
-            # The fucntion name is changed beacuse of the unique function name in the agent. so we manually change this.
-            match func_name:
-                case 'android_tap_viewId':
-                    action_json = {
-                        "type": "action",
-                        "action": {
-                            "tap": param_dict
-                        }
-                    }
-
-                case 'android_tap_position':
-                    action_json = {
-                        "type": "action",
-                        "action": {
-                            "tap": {
-                                "coordinates": param_dict
-                            }
-                        }
-                    }
-
-                case 'android_press_viewId':
-                    action_json = {
-                        "type": "action",
-                        "action": {
-                            "press": param_dict
-                        }
-                    }
-
-                case 'android_press_pos':
-                    action_json = {
-                        "type": "action",
-                        "action": {
-                            "press": {
-                                "coordinates":{
-                                    'x' : param_dict["x"],
-                                    'y' : param_dict["y"]
-                                },
-                                "duration": param_dict["duration"]
-                            }
-                        }
-                    }
-
-                case 'android_input':
-                    action_json = {
-                        "type": "action",
-                        "action": {
-                            "input": param_dict
-                        }
-                    }
-                    if action_json["action"]["input"]["viewId"] is None:
-                        del action_json["action"]["input"]["viewId"]
-
-                case 'android_swipe':
-                    action_json = {
-                        "type": "action",
-                        "action": {
-                            "swipe":{
-                                "start_coordinates":{
-                                    "x": param_dict["start_x"],
-                                    "y": param_dict["start_y"],
-                                },
-                                "end_coordinates":{
-                                    "x": param_dict["end_x"],
-                                    "y": param_dict["end_y"],
-                                },
-                                "duration": param_dict["duration"]
-                            }
-                        }
-                    }
-
-                case 'android_back':
-                    action_json = {
-                        "type": "action",
-                        "action": {
-                            "back": {}
-                        }
-                    }
-
-                case 'android_home':
-                    action_json = {
-                        "type": "action",
-                        "action": {
-                            "home": {}
-                        }
-                    }
-
-                case 'android_get_notification':
-                    action_json = {
-                        "type": "notifications_get_all","notifications_get_all": {}
-                    }
-
-                case 'android_add_notification':
-                    action_json = {
-                        "type": "notifications_add",
-                        "notifications_add": param_dict
-                    }
-
-                case 'android_get_calendar':
-                    action_json = {
-                        "type": "calendar_get",
-                        "calendar_get": param_dict
-                    }
-
-                case 'android_add_calendar':
-                    action_json = {
-                        "type": "calendar_add",
-                        "calendar_add": param_dict
-                    }
-
-                case __:
-                    self.logger.warning(f"Invalid action {func_name}")
-                    return nop_action
-
-            return action_json
-
-        operation:str = self.get(sc.agent.execute).content
-
-        match self.env:
-            case 'Mobile':
-                action_json:Dict = reformat_action(operation)
-                self.add(sc.android.write, content = json.dumps(action_json))
-
-            case 'PC':
-                self.add(sc.pc.notify, content = operation)
-
-            case __:
-                raise Exception(f"Invalid Environment parameters. {self.env}")
+        # 我们已经删除了所有安卓相关的逻辑，让代码更干净
+        # 如果需要，可以保留一个提醒，以防将来扩展到其他环境
+        elif self.env == 'Mobile':
+            self.logger.warning(f"收到了Mobile环境的执行指令，但当前未处理。")
+        else:
+            self.logger.error(f"收到了未知环境 '{self.env}' 的执行指令，已忽略。")
