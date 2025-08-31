@@ -269,13 +269,11 @@ class PCEnv(BasicComponent):
         self.add(sc.agent.operations, content=json.dumps(self.tools), silent=True)
         await server.wait_closed()
 
-    # =================================================================
-    # === 关键修正：确保函数定义里包含了 websocket 和 path 两个参数 ===
-    async def handle_connection(self, websocket, path):
-    # =================================================================
-        """当 monitor.js 连接进来时，这个函数会被调用"""
-        self.logger.info(f"浏览器监视器已连接 (路径: {path})！AI的'眼睛'已睁开。")
-        self.websocket = websocket
+    async def handle_connection(self, websocket):
+        """处理来自JS监视器的连接和消息"""
+        self.logger.info(f"浏览器监视器已连接！")
+
+        self.websocket = websocket  # 保存连接
         try:
             async for message in websocket:
                 self.logger.debug(f"收到观察数据: {message}")
@@ -419,8 +417,6 @@ class Trigger(BasicComponent):
             # PCEnv 正在监听这个频道
             self.add(sc.pc.notify, content=operation)
 
-        # 我们已经删除了所有安卓相关的逻辑，让代码更干净
-        # 如果需要，可以保留一个提醒，以防将来扩展到其他环境
         elif self.env == 'Mobile':
             self.logger.warning(f"收到了Mobile环境的执行指令，但当前未处理。")
         else:
