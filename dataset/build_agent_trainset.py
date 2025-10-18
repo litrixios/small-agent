@@ -97,6 +97,7 @@ def cut_messages(messages,max_length=20000,max_agent_response_length=10000):
 
 
 async def make_valid_prediction(messages,past_events,max_trials = 15):
+    # 给定当前的对话历史，调用LLM生成一个有效的下一步行动预测
     messages = cut_messages(deepcopy(messages))
     
     trials = 0

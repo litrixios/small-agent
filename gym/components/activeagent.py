@@ -7,6 +7,8 @@ from copy import deepcopy
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 三个关键变量 SYSTEM, STEP_OBJ, EXEC
+
 # 系统提示，告诉大模型智能体的职责，规则，响应格式
 SYSTEM = """<Role> You are a helpful assistant that provides proactive suggestions to the user. </Role> 
 
@@ -29,10 +31,12 @@ SYSTEM = """<Role> You are a helpful assistant that provides proactive suggestio
 - Set `Proactive Task` to `null` if the user doesn't need help. 
 </Rules>"""
 
+# 思考动作
 STEP_OBJ = {
     "Instructions": "Now analyze the history events and provide a task if you think the user needs your help.",
 }
 
+# 执行动作
 EXEC = """{
     "Instructions": "Decide what to do next by executing available actions.",
 }
@@ -111,7 +115,8 @@ class ProactiveAgent(BasicComponet):
 
         async with self.get_tag_lock(sinkChannels.agent.proactive):
             async with self.get_tag_lock(sinkChannels.activity):
-                # hist--assistant的输出，obs--事件内容
+
+                # hist--对话历史，obs--临时存放连续的观测事件
                 hist = []
                 obs = []
 
@@ -120,6 +125,7 @@ class ProactiveAgent(BasicComponet):
                     sinkChannels.agent.proactive,
                     sinkChannels.agent.ops
                 ]):
+                    # 若当前事件是代理自己产生的，那么把之前缩短连续的观测事件打包为一个user信息
                     if e['role'] == 'assistant':
                         hist.append({"role": "user", "content": json.dumps(obs)})
                         obs = []

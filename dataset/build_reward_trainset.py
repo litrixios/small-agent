@@ -19,7 +19,8 @@ category_nums = {
 for item in train_data:
     category_nums[item["category"]] += 1
 
-max_count = int(max(category_nums.values()) / 5)
+# ---过采样---
+max_count = int(max(category_nums.values()) / 5) # 设定过采样阈值
 
 total_num = len(train_data)
 for cname in ["Missed-Need (MN)","Correct-Rejection (CR)","Correct-Detection (CD)","False-Alarm (FA)"]:
@@ -108,6 +109,7 @@ You should answer with following JSON format:
 
 
 async def obtain_reason(item,):
+    # 会对生成的thought进行五次judgement，若出现歧义（与item['valid']不一致，则拒绝）
     messages = format_message(item['obs'], item['pred_task'], item['valid'])
         
     async with sem:
@@ -204,5 +206,15 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+"""
+可以把它比作：你有一堆只有问题和最终答案的数学题（原始数据），你想为它们制作详细的解题步骤（奖励模型训练数据）。你雇佣了一位非常聪明的解题专家（Llama 3.1）。
+
+你先把题目和答案都给专家，让他写出解题过程（obtain_reason 第一步）。
+
+为了防止他乱写，你把他的解题过程遮住答案拿给另外五位审查员（也是专家自己扮演），让他们判断这个过程最终能得出什么答案。如果五个审查员的结论不一致，或者和标准答案不符，就说明这份解题过程不合格，作废（obtain_reason 第二、三步）。
+
+只有通过了所有审查的解题过程，才会被采纳并整理成最终的教辅材料（保存到 trainset_reward_llama.json）。
+"""
 
 

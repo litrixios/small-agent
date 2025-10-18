@@ -21,6 +21,7 @@ async def data_loop(cfg_file: str,out_file: Optional[str] = None):
 
     out = open(out_file,"x")
 
+    # 在不修改 eventSink 原始代码的情况下，为其增加了“将事件写入文件”的功能。
     def decorator(func):
         def wrapped_add(*args,**kwargs):
             ret = func(*args,**kwargs)
@@ -28,7 +29,9 @@ async def data_loop(cfg_file: str,out_file: Optional[str] = None):
                 out.write(json.dumps(item.model_dump()) +'\n')
             out.flush()
             return ret
+
         return wrapped_add
+
     eventSink.add = decorator(eventSink.add)
 
     # setup event source

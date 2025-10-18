@@ -43,8 +43,8 @@ codelinker_config.request.save_completions = False
 cl = CodeLinker(config = codelinker_config)
 model_name = 'activeagent'
 
-from prompt import SYSTEM_PROMPT
-from constant import LAZY_UPDATE_INTERVAL_MILISECONDS, HOTKEY_DICT, AUMID
+from .prompt import SYSTEM_PROMPT
+from .constant import LAZY_UPDATE_INTERVAL_MILISECONDS, HOTKEY_DICT, AUMID
 
 # import the toast library.
 if sys.platform == "win32":

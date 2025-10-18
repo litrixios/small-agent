@@ -3,7 +3,7 @@ This file stores some necessary constants.
 You may modify some constants according to your needs.
 '''
 # For common use.
-from register import ToolRegister
+from .register import ToolRegister
 toolreg = ToolRegister()
 
 # define how the agent will return a proposal.

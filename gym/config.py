@@ -4,9 +4,7 @@ import os
 import logging
 import colorlog
 
-
 from .channel import sinkChannels
-
 
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
@@ -31,8 +29,6 @@ formatter = colorlog.ColoredFormatter(fmt='%(log_color)s%(levelname)s - %(name)s
 console_handler.setFormatter(formatter)
 
 logger.addHandler(console_handler)
-
-
 
 CL_CFGFILE = os.getenv("CODELINKER_CFG",os.path.join(os.path.dirname(__file__),'..',"private.toml"))
 

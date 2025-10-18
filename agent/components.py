@@ -22,13 +22,13 @@ from codelinker import CodeLinker, CodeLinkerConfig, EventProcessor, EventSink
 from codelinker.models import SEvent, ChannelTag
 
 
-from channels import sc
-from agentmodule import ActionListener, Executor, ActivityWatchClient
-from prompt import SYSTEM_PROMPT
-from constant import AgentResponse
-from constant import MAX_TRANSFER_SIZE, TIMEOUT, BUFFER_SIZE
+from .channels import sc
+from .agentmodule import ActionListener, Executor, ActivityWatchClient
+from .prompt import SYSTEM_PROMPT
+from .constant import AgentResponse
+from .constant import MAX_TRANSFER_SIZE, TIMEOUT, BUFFER_SIZE
 
-from register import ToolRegister
+from .register import ToolRegister
 toolreg = ToolRegister()
 img_base64 = None
 
@@ -288,10 +288,10 @@ class PCEnv(BasicComponent):
         operation: str = operation_event.content
 
         if operation == 'nop':
-            self.logger.info("大脑决定不执行任何操作。")
+            self.logger.info("决定不执行任何操作。")
             return
 
-        self.logger.info(f"收到大脑指令，准备执行操作: {operation}")
+        self.logger.info(f"收到指令，准备执行操作: {operation}")
         parts = operation.split('&')
         tool_name = parts[0]
         kwargs = {}
@@ -328,19 +328,19 @@ class DemoAgent(BasicComponent):
         logger.info("Agent setup done.")
 
     async def propose(self):
-
+        # 加锁，防止重复执行
         if self.get_tag_lock(sc.agent.propose).locked():
             logger.error("Another agent is proposing.")
             return
 
         async with self.get_tag_lock(sc.agent.propose):
             async with self.get_tag_lock(sc.activity):
-
+                # 可用的操作
                 ops_event:SEvent = self.get(sc.agent.operations)
                 ops:str = ops_event.content
 
+                # gather历史信息
                 obs:Dict = self.gather([sc.observation],return_dumper='json')
-
                 history = obs
 
                 # TODO: Can we add user feedback for PC?
@@ -402,14 +402,14 @@ class Trigger(BasicComponent):
 
     async def setup(self):
         logger.info("Initializing Trigger...")
-        # 监听来自“大脑”(Agent)的最终决策指令
+        # 监听来自Agent的最终决策指令并执行
         self.listen(sc.agent.execute)(self.execute)
         logger.info("Trigger setup done.")
 
     async def execute(self):
-        # 从事件中获取大脑决定要执行的操作字符串
+        # 从事件中获取Agent决定要执行的操作字符串
         operation: str = self.get(sc.agent.execute).content
-        self.logger.info(f"神经系统(Trigger)收到指令: {operation}")
+        self.logger.info(f"Trigger收到指令: {operation}")
 
         # 根据当前环境，将指令转发到正确的执行频道
         if self.env == 'PC':

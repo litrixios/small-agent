@@ -12,8 +12,8 @@ from typing import Literal
 import fire
 from aw_client import ActivityWatchClient
 
-from components import DemoAgent, AndroidEnv, PCEnv, Trigger, eventSink, logger
-from channels import sc
+from .components import DemoAgent, AndroidEnv, PCEnv, Trigger, eventSink, logger
+from .channels import sc
 
 # Get rid of other logging information.
 logging.getLogger("httpx").setLevel(logging.CRITICAL)
