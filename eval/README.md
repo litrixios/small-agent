@@ -23,6 +23,29 @@ python eval/reward_model_scoring.py
 
 After the process, you will get the final score for your reward model.
 
+
+## Quick RL Baseline (Fast Experiment, Upgraded)
+
+For a fast RL-style experiment, use the upgraded contextual-bandit script:
+
+```bash
+python eval/quick_rl.py --episodes 20 --dim 8192
+```
+
+Compared to the earlier minimal version, this one adds:
+- richer hashed features (unigram + bigram + length bucket)
+- policy-gradient training (REINFORCE) with moving baseline
+- automatic threshold tuning on a held-out validation split
+
+It trains on `dataset/reward_data/train_data.jsonl`, evaluates on
+`dataset/reward_data/test_data.jsonl`, and writes metrics to
+`eval/results/quick_rl_metrics.json`.
+
+Fast tuning tips:
+- Less training: `--episodes 8`
+- Smaller model: `--dim 2048`
+- Stable runs: `--seed 42`
+
 ## Proactive Agent Evaluation
 
 To check your model's performance, you will need to change the `./eval/script.py` and load in your model(or use the SDK), and run the script with:
