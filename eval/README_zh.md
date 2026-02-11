@@ -43,6 +43,29 @@ python eval/quick_rl.py --episodes 20 --dim 8192
 - 缩小维度：`--dim 2048`
 - 固定随机种子：`--seed 42`
 
+
+### Qwen + 强化学习门控（推荐对照实验）
+
+为了对比“仅 Qwen”与“Qwen + RL 的 help/no-help 决策”，可以按下面运行：
+
+```bash
+# 1) 训练 RL 门控模型
+python eval/quick_rl.py --episodes 20 --dim 8192 \
+  --out eval/results/quick_rl_metrics.json \
+  --model_out eval/results/quick_rl_model.json
+
+# 2) 仅 Qwen 基线（无门控）
+python eval/script.py run --model_name qwen2-7b-instruct
+
+# 3) Qwen + RL 门控
+python eval/script.py run --model_name qwen2-7b-instruct \
+  --gate_model_path eval/results/quick_rl_model.json
+```
+
+当设置 `gate_model_path` 后，会先预测 `p_help`：
+- 若 `p_help` 低于阈值，则直接输出 `null`；
+- 若 `p_help` 高于阈值，再调用 LLM 生成具体帮助内容。
+
 ## 主动智能体评估
 为了检查模型性能，你需要修改文件 `./eval/script.py` 以导入你的模型，同时运行脚本
 ```bash

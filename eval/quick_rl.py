@@ -17,6 +17,7 @@ import json
 import math
 import random
 import re
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -25,6 +26,11 @@ import fire
 import jsonlines
 
 TOKEN_RE = re.compile(r"[A-Za-z_]+")
+
+
+def _stable_hash(text: str, dim: int) -> int:
+    digest = hashlib.blake2b(text.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, byteorder="big", signed=False) % dim
 
 
 @dataclass
@@ -57,14 +63,14 @@ def _hash_features(text: str, dim: int) -> list[int]:
 
     # unigram features
     for tok in tokens:
-        feats.append(hash(f"u:{tok}") % dim)
+        feats.append(_stable_hash(f"u:{tok}", dim))
 
     # bigram features add local context but remain cheap
     for i in range(len(tokens) - 1):
-        feats.append(hash(f"b:{tokens[i]}_{tokens[i+1]}") % dim)
+        feats.append(_stable_hash(f"b:{tokens[i]}_{tokens[i+1]}", dim))
 
     # coarse length bucket often helps proactive triggering
-    feats.append(hash(_length_bucket(len(tokens))) % dim)
+    feats.append(_stable_hash(_length_bucket(len(tokens)), dim))
 
     if not feats:
         feats = [0]
@@ -101,6 +107,10 @@ class PolicyBandit:
     def predict(self, feats: list[int], threshold: float = 0.5) -> int:
         return 1 if self.prob_help(feats) >= threshold else 0
 
+    def prob_from_text(self, text: str) -> float:
+        feats = _hash_features(text, self.dim)
+        return self.prob_help(feats)
+
     def update(self, feats: list[int], action: int, reward: float, baseline_beta: float = 0.95):
         """REINFORCE gradient for Bernoulli policy with scalar baseline."""
         p = self.prob_help(feats)
@@ -110,6 +120,29 @@ class PolicyBandit:
         for i in feats:
             self.w[i] += coeff
         self.baseline = baseline_beta * self.baseline + (1.0 - baseline_beta) * reward
+
+    def dump(self, path: str | Path, threshold: float):
+        payload = {
+            "dim": self.dim,
+            "lr": self.lr,
+            "baseline": self.baseline,
+            "threshold": threshold,
+            "weights": self.w,
+        }
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+
+    @classmethod
+    def load(cls, path: str | Path) -> tuple["PolicyBandit", float]:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        model = cls(dim=payload["dim"], lr=payload.get("lr", 0.05))
+        model.w = payload["weights"]
+        model.baseline = payload.get("baseline", 0.0)
+        threshold = payload.get("threshold", 0.5)
+        return model, threshold
 
 
 def _compute_metrics(preds: list[int], labels: list[int]) -> dict:
@@ -181,6 +214,7 @@ def train(
     val_ratio: float = 0.15,
     seed: int = 42,
     out: str = "eval/results/quick_rl_metrics.json",
+    model_out: str = "eval/results/quick_rl_model.json",
 ):
     random.seed(seed)
     all_train = list(_iter_samples(train_path))
@@ -219,15 +253,18 @@ def train(
             "train_size": len(train_data),
             "val_size": len(val_data),
             "test_size": len(test_data),
+            "model_out": model_out,
         }
     )
 
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
+    model.dump(model_out, threshold=threshold)
 
     print(json.dumps(metrics, indent=2))
     print(f"Saved metrics to: {out}")
+    print(f"Saved model to: {model_out}")
 
 
 if __name__ == "__main__":
