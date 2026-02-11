@@ -20,6 +20,29 @@ python eval/reward_model_scoring.py
 ```
 在该过程之后，你将会得到你的奖励模型的最终分数。
 
+
+## 快速强化学习基线（升级版且仍然快）
+
+如果你希望尽快跑出强化学习实验，可以使用升级后的 contextual bandit 脚本：
+
+```bash
+python eval/quick_rl.py --episodes 20 --dim 8192
+```
+
+相比最初的极简版，这个版本新增：
+- 更丰富的哈希特征（unigram + bigram + 文本长度桶）
+- REINFORCE 策略梯度 + 移动平均 baseline
+- 在验证集上自动调阈值（提升 F1 稳定性）
+
+脚本会在 `dataset/reward_data/train_data.jsonl` 上训练，在
+`dataset/reward_data/test_data.jsonl` 上评估，并将结果写入
+`eval/results/quick_rl_metrics.json`。
+
+提速建议：
+- 降低迭代：`--episodes 8`
+- 缩小维度：`--dim 2048`
+- 固定随机种子：`--seed 42`
+
 ## 主动智能体评估
 为了检查模型性能，你需要修改文件 `./eval/script.py` 以导入你的模型，同时运行脚本
 ```bash
