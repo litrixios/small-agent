@@ -2,13 +2,13 @@
 
 This keeps training lightweight while improving over the initial version:
 1) richer hashed features (unigram + bigram + length bucket)
-2) policy-gradient bandit with moving baseline (REINFORCE)
+2) conservative advantage-weighted policy updates (AWR-style)
 3) automatic decision-threshold tuning on a held-out validation split
 
 The task is contextual bandit:
 - state: recent observation text
 - action: 0 (stay silent) / 1 (propose help)
-- reward: +1 if action matches help-needed signal, else -1
+- reward: configurable shaping for TP/TN/FP/FN trade-offs
 """
 
 from __future__ import annotations
@@ -82,7 +82,7 @@ def _reward(action: int, help_needed: int) -> float:
 
 
 class PolicyBandit:
-    """Two-action linear policy trained with REINFORCE + moving baseline."""
+    """Two-action linear policy with conservative actor updates."""
 
     def __init__(self, dim: int = 8192, lr: float = 0.05):
         self.dim = dim
@@ -111,14 +111,37 @@ class PolicyBandit:
         feats = _hash_features(text, self.dim)
         return self.prob_help(feats)
 
-    def update(self, feats: list[int], action: int, reward: float, baseline_beta: float = 0.95):
-        """REINFORCE gradient for Bernoulli policy with scalar baseline."""
+    def update(
+        self,
+        feats: list[int],
+        action: int,
+        reward: float,
+        baseline_beta: float = 0.95,
+        entropy_coef: float = 0.01,
+        l2_coef: float = 1e-5,
+        bc_coef: float = 0.20,
+        label: int | None = None,
+    ):
+        """Conservative advantage-weighted actor update.
+
+        - Advantage policy gradient: robust online adaptation.
+        - Weak behavior-cloning anchor (`bc_coef`): stabilizes training under noisy rewards.
+        - Entropy + L2: keeps policy from becoming over-confident and brittle.
+        """
         p = self.prob_help(feats)
         advantage = reward - self.baseline
-        # grad(log pi(a|s)) for Bernoulli(logit): (a - p) * x
+        # Advantage-weighted policy gradient for Bernoulli(logit): (a - p) * x
         coeff = self.lr * advantage * (action - p) / max(1, len(feats))
+
+        # Conservative regularization: entropy gradient on logit + optional BC anchor.
+        entropy_grad = (math.log(max(1e-8, 1.0 - p)) - math.log(max(1e-8, p))) * p * (1.0 - p)
+        coeff += self.lr * entropy_coef * entropy_grad / max(1, len(feats))
+        if label is not None and bc_coef > 0.0:
+            coeff += self.lr * bc_coef * (label - p) / max(1, len(feats))
+
         for i in feats:
             self.w[i] += coeff
+            self.w[i] *= (1.0 - self.lr * l2_coef)
         self.baseline = baseline_beta * self.baseline + (1.0 - baseline_beta) * reward
 
     def dump(self, path: str | Path, threshold: float):
@@ -203,6 +226,23 @@ def _tune_threshold(model: PolicyBandit, val_data: list[Sample], dim: int) -> fl
     return best_t
 
 
+def _shaped_reward(
+    action: int,
+    help_needed: int,
+    tp_reward: float,
+    tn_reward: float,
+    fp_penalty: float,
+    fn_penalty: float,
+) -> float:
+    if action == 1 and help_needed == 1:
+        return tp_reward
+    if action == 0 and help_needed == 0:
+        return tn_reward
+    if action == 1 and help_needed == 0:
+        return -abs(fp_penalty)
+    return -abs(fn_penalty)
+
+
 def train(
     train_path: str = "dataset/reward_data/train_data.jsonl",
     test_path: str = "dataset/reward_data/test_data.jsonl",
@@ -211,6 +251,13 @@ def train(
     lr: float = 0.05,
     epsilon_start: float = 0.20,
     epsilon_end: float = 0.02,
+    tp_reward: float = 1.0,
+    tn_reward: float = 1.0,
+    fp_penalty: float = 1.0,
+    fn_penalty: float = 1.0,
+    entropy_coef: float = 0.01,
+    l2_coef: float = 1e-5,
+    bc_coef: float = 0.20,
     val_ratio: float = 0.15,
     seed: int = 42,
     out: str = "eval/results/quick_rl_metrics.json",
@@ -231,8 +278,23 @@ def train(
         for s in train_data:
             feats = _hash_features(s.text, dim)
             action = model.sample_action(feats, epsilon=epsilon)
-            reward = _reward(action, s.help_needed)
-            model.update(feats, action, reward)
+            reward = _shaped_reward(
+                action,
+                s.help_needed,
+                tp_reward=tp_reward,
+                tn_reward=tn_reward,
+                fp_penalty=fp_penalty,
+                fn_penalty=fn_penalty,
+            )
+            model.update(
+                feats,
+                action,
+                reward,
+                entropy_coef=entropy_coef,
+                l2_coef=l2_coef,
+                bc_coef=bc_coef,
+                label=s.help_needed,
+            )
 
     # threshold calibration on held-out validation
     threshold = _tune_threshold(model, val_data, dim=dim)
@@ -248,6 +310,13 @@ def train(
             "episodes": episodes,
             "dim": dim,
             "lr": lr,
+            "tp_reward": tp_reward,
+            "tn_reward": tn_reward,
+            "fp_penalty": fp_penalty,
+            "fn_penalty": fn_penalty,
+            "entropy_coef": entropy_coef,
+            "l2_coef": l2_coef,
+            "bc_coef": bc_coef,
             "val_ratio": val_ratio,
             "seed": seed,
             "train_size": len(train_data),
