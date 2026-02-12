@@ -68,6 +68,21 @@ python eval/script.py run --model_name qwen2-7b-instruct \
 When `gate_model_path` is set, the agent first predicts `p_help`; if `p_help` is below
 threshold, it outputs `null` directly; otherwise it calls the LLM.
 
+
+### API-based judge (e.g., DeepSeek)
+
+If you do not have a local reward model on `localhost:8000`, you can run judging via API:
+
+```bash
+cd eval
+JUDGE_BASE_URL=https://api.deepseek.com/v1 \
+JUDGE_API_KEY=YOUR_API_KEY \
+JUDGE_MODEL=deepseek-chat \
+sh judge_result.sh
+
+sh calculate.sh
+```
+
 ## Proactive Agent Evaluation
 
 To check your model's performance, you will need to change the `./eval/script.py` and load in your model(or use the SDK), and run the script with:

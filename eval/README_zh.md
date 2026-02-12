@@ -66,6 +66,21 @@ python eval/script.py run --model_name qwen2-7b-instruct \
 - 若 `p_help` 低于阈值，则直接输出 `null`；
 - 若 `p_help` 高于阈值，再调用 LLM 生成具体帮助内容。
 
+
+### 使用 API 进行 judge（例如 DeepSeek）
+
+如果你没有本地 reward model（`localhost:8000`），可以直接用 API 做判分：
+
+```bash
+cd eval
+JUDGE_BASE_URL=https://api.deepseek.com/v1 \
+JUDGE_API_KEY=YOUR_API_KEY \
+JUDGE_MODEL=deepseek-chat \
+sh judge_result.sh
+
+sh calculate.sh
+```
+
 ## 主动智能体评估
 为了检查模型性能，你需要修改文件 `./eval/script.py` 以导入你的模型，同时运行脚本
 ```bash
