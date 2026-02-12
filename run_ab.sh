@@ -23,10 +23,10 @@ python eval/quick_rl.py \
   --model_out eval/results/quick_rl_model.json
 
 echo "[2/7] Run baseline traces: ${MODEL_BASE}"
-python eval/script.py run --model_name "$MODEL_BASE"
+python eval/script.py --model_name "$MODEL_BASE"
 
 echo "[3/7] Run RL-gated traces: ${MODEL_RL}"
-python eval/script.py run \
+python eval/script.py \
   --model_name "$MODEL_RL" \
   --gate_model_path eval/results/quick_rl_model.json
 
