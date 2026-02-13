@@ -112,33 +112,89 @@ python dataset/build_reward_trainset.py
 
 ## 4) 用 LLaMA-Factory 微调奖励模型（RM）
 
-仓库文档推荐使用 LLaMA-Factory。一个最小可执行思路：
+可以，**如果你已经完成第 2 步、且不需要新增数据，就可以直接开始第 4 步微调**。
 
-1. 安装并进入 LLaMA-Factory；
-2. 在其数据配置里注册 `dataset/reward_data/trainset_reward_llama.json`；
-3. 选择奖励模型训练 stage（RM）；
-4. 启动 LoRA 或全参训练。
+下面给你一个“从 0 到 1”的新手版流程（默认你要训练 LoRA 版 RM）：
 
-示例命令（参数需按你的 GPU 资源与 LLaMA-Factory 版本调整）：
+### 4.1 安装 LLaMA-Factory
+
+```bash
+git clone https://github.com/hiyouga/LLaMA-Factory.git
+cd LLaMA-Factory
+pip install -e .
+```
+
+> 若安装报错，通常是 `torch` / `cuda` 版本不匹配，先按你机器 CUDA 版本安装 PyTorch 再重试。
+
+### 4.2 把本仓库数据链接到 LLaMA-Factory
+
+假设你的 ProactiveAgent 仓库在：`/workspace/small-agent`。
+
+这里我们直接使用已有数据：
+
+- `/workspace/small-agent/dataset/reward_data/trainset_reward_llama.json`
+
+### 4.3 在 LLaMA-Factory 注册数据集
+
+编辑 `LLaMA-Factory/data/dataset_info.json`，添加一条（名字可自定义，这里用 `proactive_rm`）：
+
+```json
+{
+  "proactive_rm": {
+    "file_name": "/workspace/small-agent/dataset/reward_data/trainset_reward_llama.json"
+  }
+}
+```
+
+> 如果你的 `dataset_info.json` 已有很多项，只需要在最外层 JSON 里新增这一个 key。注意逗号和 JSON 格式合法。
+
+### 4.4 准备一个最小训练命令（先跑通）
+
+在 `LLaMA-Factory` 目录执行：
 
 ```bash
 llamafactory-cli train \
   --stage rm \
-  --model_name_or_path Qwen/Qwen2.5-7B-Instruct \
   --do_train true \
+  --model_name_or_path /data/models/Qwen2.5-7B-Instruct \
   --dataset proactive_rm \
-  --dataset_dir /path/to/ProactiveAgent/dataset/reward_data \
   --template qwen \
   --finetuning_type lora \
-  --output_dir /path/to/output/proactive-rm \
+  --output_dir ./saves/proactive-rm-lora \
+  --overwrite_output_dir true \
   --per_device_train_batch_size 1 \
   --gradient_accumulation_steps 8 \
   --learning_rate 1e-5 \
-  --num_train_epochs 3 \
+  --num_train_epochs 2 \
+  --cutoff_len 4096 \
+  --logging_steps 10 \
+  --save_steps 200 \
+  --plot_loss true \
   --bf16 true
 ```
 
-> 核心点：让 `proactive_rm` 指向 `trainset_reward_llama.json`，并确保字段映射为多轮对话格式。
+参数解释（你最需要关注的 6 个）：
+
+- `--stage rm`：奖励模型训练模式。
+- `--model_name_or_path`：你在第 2 步下载好的底模路径。
+- `--dataset proactive_rm`：对应刚才在 `dataset_info.json` 注册的名字。
+- `--template qwen`：Qwen 系列一般用这个模板。
+- `--finetuning_type lora`：先用 LoRA，显存压力更小。
+- `--bf16 true`：A100 / 4090 等常见新卡建议打开；如果不支持改成 `--fp16 true`。
+
+### 4.5 训练完成后你会得到什么
+
+- LoRA 适配器权重目录：`./saves/proactive-rm-lora`
+- 你可以：
+  1) 直接用支持 LoRA 的推理方式加载；或
+  2) 先 merge 成完整权重，再用 vLLM 部署。
+
+### 4.6 新手常见报错与处理
+
+- **显存不足（OOM）**：把 `--cutoff_len` 降到 2048，`--gradient_accumulation_steps` 适当调大。
+- **模板不匹配**：Qwen 用 `--template qwen`；Llama 系请改对应模板。
+- **找不到数据集**：检查 `dataset_info.json` 的 key 名与 `--dataset` 是否完全一致。
+- **精度参数报错**：`bf16` 不支持就改 `fp16`。
 
 ## 5) 部署微调后的奖励模型并评估
 
