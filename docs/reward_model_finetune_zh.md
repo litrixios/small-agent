@@ -196,15 +196,70 @@ llamafactory-cli train \
 - **找不到数据集**：检查 `dataset_info.json` 的 key 名与 `--dataset` 是否完全一致。
 - **精度参数报错**：`bf16` 不支持就改 `fp16`。
 
-## 5) 部署微调后的奖励模型并评估
+## 5) 训练完后下一步：导出、部署、联调、评测（按顺序做）
 
-将微调后模型（或 merged 权重）再次用 vLLM 启动为 OpenAI 接口后，运行：
+你现在训练完了，建议按下面 4 步继续：
+
+### 5.1 先把 LoRA 导出为可部署模型（推荐）
+
+如果你训练得到的是 LoRA 适配器，通常先做 merge，再给 vLLM 部署会更稳定。
+
+在 `LLaMA-Factory` 目录执行（路径按你的实际情况修改）：
+
+```bash
+llamafactory-cli export \
+  --model_name_or_path /data/models/Qwen2.5-7B-Instruct \
+  --adapter_name_or_path ./saves/proactive-rm-lora \
+  --template qwen \
+  --finetuning_type lora \
+  --export_dir /data/models/proactive-rm-merged
+```
+
+导出后，你会得到一个可直接部署的目录：`/data/models/proactive-rm-merged`。
+
+### 5.2 用 vLLM 启动你的 RM 服务
+
+```bash
+python -m vllm.entrypoints.openai.api_server \
+  --model /data/models/proactive-rm-merged \
+  --served-model-name proactive-rm \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --dtype auto
+```
+
+### 5.3 先做一个连通性自检（强烈建议）
+
+开另一个终端，做最小请求验证：
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "proactive-rm",
+    "messages": [{"role": "user", "content": "test"}],
+    "temperature": 0
+  }'
+```
+
+如果能返回 JSON 结果，说明服务可用。
+
+### 5.4 运行仓库评测脚本
+
+然后回到本仓库，修改 `eval/reward_model_scoring.py` 里的模型配置：
+
+- `base_url` -> `http://localhost:8000/v1/`
+- `model` -> `proactive-rm`
+
+再执行：
 
 ```bash
 python eval/reward_model_scoring.py
 ```
 
-然后你可以得到 RM 在 `test_data.jsonl` 上的分类统计与 F1 等指标。
+你会得到 RM 在 `test_data.jsonl` 上的分类统计、Accuracy、Precision、Recall、F1。
+
+> 实操建议：先保留一份基座模型的评测结果，再和你当前微调版做对比，重点看 F1 与 False-Alarm 的变化。
 
 ## 6) 常见问题
 
@@ -216,3 +271,115 @@ python eval/reward_model_scoring.py
 
 - **Q: 我只想先验证流程通不通？**
   可以先用小模型（如 7B）+ 少量 epoch，确认训练、部署、打分三段链路打通，再扩展规模。
+
+## 7) 用你新训练的 RM，重新测试 RL-gate（迁移到新平台版）
+
+你这个场景很典型：**模型已经重训完成 + 平台迁移后环境变化**。建议按下面顺序做，避免“结果不可比”。
+
+### 7.1 先固定评测基准（确保可复现）
+
+在新平台先确认这些文件路径仍然存在：
+
+- `dataset/reward_data/train_data.jsonl`
+- `dataset/reward_data/test_data.jsonl`
+- `eval/quick_rl.py`
+- `eval/script.py`
+
+并固定随机种子（例如 `--seed 42`），保证前后两次结果可比。
+
+### 7.2 重新训练 RL-gate（建议重训）
+
+因为你更换了评估模型（RM）且迁移了平台，**建议重新训练 gate**，不要直接沿用旧 `quick_rl_model.json`。
+
+```bash
+python eval/quick_rl.py \
+  --episodes 20 \
+  --dim 8192 \
+  --seed 42 \
+  --out eval/results/quick_rl_metrics_newrm.json \
+  --model_out eval/results/quick_rl_model_newrm.json
+```
+
+如果新平台资源紧张，可先用：
+
+```bash
+python eval/quick_rl.py --episodes 8 --dim 2048 --seed 42 \
+  --out eval/results/quick_rl_metrics_smoke.json \
+  --model_out eval/results/quick_rl_model_smoke.json
+```
+
+### 7.3 跑两组对照（无 gate vs 有 gate）
+
+先跑“仅底模”：
+
+```bash
+python eval/script.py --model_name qwen2-7b-instruct
+```
+
+再跑“底模 + RL-gate”：
+
+```bash
+python eval/script.py \
+  --model_name qwen2-7b-instruct \
+  --gate_model_path eval/results/quick_rl_model_newrm.json
+```
+
+### 7.4 用你新的 RM 做 judge（关键）
+
+如果你本地已把新 RM 部署在 `http://localhost:8000/v1`，执行：
+
+```bash
+sh eval/judge_result.sh
+sh eval/calculate.sh
+```
+
+如果你改了地址/模型名，先在 judge 脚本（或其读取的环境变量）里把 `base_url`、`model` 改成你新 RM 的配置。
+
+### 7.5 你应该重点看哪些指标
+
+至少比较这 4 项（有 gate 相比无 gate）：
+
+- `F1`（总体质量）
+- `False-Alarm`（是否更少打扰）
+- `Precision`（提议是否更准）
+- `Recall`（是否漏掉太多需要帮助场景）
+
+经验上，RL-gate 的目标通常是：**在尽量不明显伤害 Recall 的前提下，显著降低 False-Alarm 并提升 Precision / F1**。
+
+### 7.6 迁移平台后常见坑位
+
+- **路径变了**：`eval/script.py` 和 `quick_rl.py` 默认相对路径，建议始终在仓库根目录执行。
+- **配置丢失**：`private.toml` 的模型与 API 配置需要在新平台重新确认。
+- **评测不一致**：确保两组实验使用同一批测试数据、同一随机种子、同一 judge RM。
+- **旧缓存干扰**：建议给新实验结果文件用新名字（如 `_newrm` 后缀），避免覆盖旧结果导致混淆。
+
+
+
+### 7.7 你这份一键脚本能不能直接跑？可以，但要先改 4 个点
+
+结论：**可以作为评测入口**，但你贴的版本建议先修正再执行。
+
+1. 你粘贴的是带 `\n` 转义的文本，保存成 `.sh` 时要变成真正换行（下面给可直接用版本）。
+2. `eval/script.py` 的 CLI 是 `fire.Fire(run)`，应写成 `python eval/script.py --model_name ...`，不要加 `run` 子命令。
+3. `MODEL_RL` 最好和 `MODEL_BASE` 指向同一个底层模型 alias（只是是否加 gate 不同），否则不是纯粹 gate 对照。
+4. 如果你已经有“新 RM 本地服务”，建议把 `JUDGE_BASE_URL/JUDGE_MODEL` 指向你的 RM，别继续用默认占位值。
+
+可直接使用仓库里我给你的脚本：`eval/run_rl_gate_with_new_rm.sh`。
+
+你可以先看一眼脚本内容：
+
+```bash
+sed -n '1,200p' eval/run_rl_gate_with_new_rm.sh
+```
+
+最小执行方式（你现在就能跑）：
+
+```bash
+bash eval/run_rl_gate_with_new_rm.sh
+```
+
+若你想临时改 judge 到云 API：
+
+```bash
+JUDGE_BASE_URL=https://api.deepseek.com/v1 JUDGE_API_KEY=你的KEY JUDGE_MODEL=deepseek-chat bash eval/run_rl_gate_with_new_rm.sh
+```
